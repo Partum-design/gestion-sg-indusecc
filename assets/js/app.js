@@ -3009,12 +3009,7 @@
       y = writeLine(doc, 'Representante auditado', state.project.auditedRep || 'N/D', y, margin);
       y = writeLine(doc, 'Sitio', state.project.site || 'N/D', y, margin);
       y = writeLine(doc, 'Fecha de auditoría', state.project.date || 'N/D', y, margin);
-      y = writeLine(doc, 'Versión del documento', state.project.docVersion || 'N/D', y, margin);
       y = writeParagraph(doc, 'Alcance', state.project.scope || 'N/D', y + 4, margin, width);
-
-      y = ensureSpace(doc, y, 116);
-      y = writeSectionHeading(doc, 'Control de versiones', y + 10, margin, width);
-      y = writeHistoryTable(doc, y, margin, width);
 
       y = ensureSpace(doc, y, 214);
       y = writeSectionHeading(doc, 'Resumen y clasificación de la auditoría', y + 10, margin, width);
@@ -3137,52 +3132,6 @@
     doc.setFontSize(12);
     doc.text(iso.code + ' ' + (iso.version || ''), textStart, 62);
     doc.setTextColor(33, 33, 33);
-  }
-
-  function writeHistoryTable(doc, y, margin, width) {
-    var rowHeight = 18;
-    var colA = 68;
-    var colB = 82;
-    var colC = 96;
-    var colD = width - colA - colB - colC;
-    var x = margin;
-    var i;
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFillColor(245, 236, 220);
-    doc.rect(x, y, width, rowHeight, 'F');
-    doc.setDrawColor(220, 199, 157);
-    doc.rect(x, y, width, rowHeight);
-
-    doc.setFontSize(8);
-    doc.text('Versión', x + 4, y + 12);
-    doc.text('Fecha', x + colA + 4, y + 12);
-    doc.text('Autor', x + colA + colB + 4, y + 12);
-    doc.text('Descripción de cambios', x + colA + colB + colC + 4, y + 12);
-    y += rowHeight;
-
-    for (i = 0; i < 3; i += 1) {
-      var row = state.history[i] || {};
-      var version = row.version || '';
-      var date = row.date || '';
-      var author = row.author || '';
-      var description = row.description || '';
-
-      doc.rect(x, y, width, rowHeight);
-      doc.line(x + colA, y, x + colA, y + rowHeight);
-      doc.line(x + colA + colB, y, x + colA + colB, y + rowHeight);
-      doc.line(x + colA + colB + colC, y, x + colA + colB + colC, y + rowHeight);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.text(String(version), x + 4, y + 12);
-      doc.text(String(date), x + colA + 4, y + 12);
-      doc.text(String(author), x + colA + colB + 4, y + 12);
-      doc.text(String(description), x + colA + colB + colC + 4, y + 12, { maxWidth: colD - 8 });
-      y += rowHeight;
-    }
-
-    return y + 12;
   }
 
   // ---------------------------------------------------------------------

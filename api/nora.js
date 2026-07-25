@@ -138,7 +138,7 @@ function buildSystemPrompt(payload) {
   ];
 
   if (payload && payload.intent === 'fill') {
-    lines.push('Intención detectada: ayudar a llenar el punto. Responde con: 1) qué pide el punto, 2) cómo marcar conformidad, 3) texto sugerido para hallazgo/observación, 4) acción recomendada, 5) evidencia sugerida.');
+    lines.push('Intención detectada: ayudar a llenar el punto. Responde con: 1) qué exige el criterio, 2) cómo marcar conformidad, 3) texto sugerido para hallazgo/observación, 4) categoría del hallazgo recomendada, 5) evidencia sugerida.');
   }
 
   if (payload && payload.activeIso) {
@@ -149,8 +149,7 @@ function buildSystemPrompt(payload) {
 
   if (payload && payload.clause) {
     lines.push('Punto: ' + safeText(payload.clause.id) + ' - ' + safeText(payload.clause.title) + '.');
-    if (payload.clause.definition) lines.push('Definición: ' + safeText(payload.clause.definition) + '.');
-    if (payload.clause.question) lines.push('Pregunta de auditoría: ' + safeText(payload.clause.question) + '.');
+    if (payload.clause.definition) lines.push('Criterio: ' + safeText(payload.clause.definition) + '.');
     if (payload.clause.evidence && payload.clause.evidence.length) lines.push('Evidencia sugerida: ' + safeText(payload.clause.evidence.join(', ')) + '.');
   }
 
@@ -158,7 +157,7 @@ function buildSystemPrompt(payload) {
     lines.push('Estado: ' + safeText(payload.finding.status || 'Sin registrar') + '.');
     lines.push('Riesgo: ' + safeText(payload.finding.risk || 'Sin registrar') + '.');
     if (payload.finding.note) lines.push('Hallazgo: ' + safeText(payload.finding.note) + '.');
-    if (payload.finding.action) lines.push('Acción: ' + safeText(payload.finding.action) + '.');
+    if (payload.finding.category) lines.push('Categoría del hallazgo: ' + safeText(payload.finding.category) + '.');
   }
 
   if (payload && payload.auditSummary) {

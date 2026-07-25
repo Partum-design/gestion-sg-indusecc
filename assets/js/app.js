@@ -26,6 +26,9 @@
   var EVIDENCE_MAX_SIZE_BYTES = 25 * 1024 * 1024;
   var EVIDENCE_MAX_PER_FINDING = 15;
 
+  // Categoría del hallazgo (criterio ISO 19011): clasifica el resultado de cada punto evaluado.
+  var FINDING_CATEGORIES = ['', 'Conforme', 'Observación', 'No conformidad menor', 'No conformidad mayor', 'Oportunidad de mejora'];
+
   var sb = null;
   var currentUser = null;
   var currentProfile = null;
@@ -85,7 +88,9 @@
         date: '',
         scope: '',
         docVersion: '',
-        auditedRep: ''
+        auditedRep: '',
+        objective: '',
+        criteria: ''
       },
       history: getEmptyHistoryRows(),
       findings: {},
@@ -272,7 +277,7 @@
     var i;
     var readOnlySelectors = [
       '#project-name', '#auditor-name', '#audit-site', '#audit-date', '#audit-scope',
-      '#doc-version', '#audited-rep', '[data-history-row]', '#clear-project', '#floating-clear',
+      '#doc-version', '#audited-rep', '#audit-objective', '#audit-criteria', '[data-history-row]', '#clear-project', '#floating-clear',
       '#clear-signature', '#signature-file'
     ];
     for (i = 0; i < readOnlySelectors.length; i += 1) {
@@ -358,6 +363,8 @@
     dom.auditScope = document.getElementById('audit-scope');
     dom.docVersion = document.getElementById('doc-version');
     dom.auditedRep = document.getElementById('audited-rep');
+    dom.auditObjective = document.getElementById('audit-objective');
+    dom.auditCriteria = document.getElementById('audit-criteria');
     dom.historyInputs = document.querySelectorAll('[data-history-row][data-history-field]');
 
     dom.globalProgressFill = document.getElementById('global-progress-fill');
@@ -459,7 +466,7 @@
     var i;
     for (i = 0; i < clauses.length; i += 1) {
       var clause = clauses[i] || {};
-      if (!clause.id || !clause.title || !clause.question) continue;
+      if (!clause.id || !clause.title) continue;
       if (!clause.definition) clause.definition = 'Punto de control de la norma.';
       if (!clause.evidence || Object.prototype.toString.call(clause.evidence) !== '[object Array]') {
         clause.evidence = [];
@@ -632,6 +639,8 @@
     bindProjectField(dom.auditScope, 'scope');
     bindProjectField(dom.docVersion, 'docVersion');
     bindProjectField(dom.auditedRep, 'auditedRep');
+    bindProjectField(dom.auditObjective, 'objective');
+    bindProjectField(dom.auditCriteria, 'criteria');
     bindHistoryFields();
 
     if (dom.isoQuickSelect) {
@@ -909,6 +918,8 @@
     if (dom.auditScope) dom.auditScope.value = state.project.scope || '';
     if (dom.docVersion) dom.docVersion.value = state.project.docVersion || '';
     if (dom.auditedRep) dom.auditedRep.value = state.project.auditedRep || '';
+    if (dom.auditObjective) dom.auditObjective.value = state.project.objective || '';
+    if (dom.auditCriteria) dom.auditCriteria.value = state.project.criteria || '';
 
     if (dom.historyInputs && dom.historyInputs.length) {
       var i;
@@ -1330,7 +1341,7 @@
       status: '',
       risk: '',
       note: '',
-      action: '',
+      category: '',
       attachments: []
     };
   }
@@ -1340,7 +1351,7 @@
     if (!finding.risk) finding.risk = '';
     finding.risk = normalizeRiskValue(finding.risk);
     if (!finding.note) finding.note = '';
-    if (!finding.action) finding.action = '';
+    if (!finding.category) finding.category = '';
 
     if (!finding.attachments || Object.prototype.toString.call(finding.attachments) !== '[object Array]') {
       finding.attachments = [];
@@ -1795,20 +1806,20 @@
       + 'Enfoque: ' + textEs(iso.focus || 'Sistema de gestión activo') + '.\n'
       + 'Resumen: ' + textEs(iso.summary || 'Marco normativo seleccionado') + '.\n\n'
       + 'Cuando llenes el checklist, piensa en tres cosas:\n'
-      + '1. Qué exige el requisito.\n'
+      + '1. Qué exige el requisito (el criterio).\n'
       + '2. Qué evidencia objetiva demuestra cumplimiento.\n'
-      + '3. Qué hallazgo y acción debes documentar si hay brechas.';
+      + '3. Qué hallazgo y categoría debes documentar si hay brechas.';
   }
 
   function buildChecklistGuidance(iso) {
     var prefix = iso ? 'Para llenar ' + iso.code + ' trabaja así:\n' : 'Para llenar el checklist trabaja así:\n';
     return prefix
-      + '1. Lee la definición del punto y la pregunta de auditoría.\n'
+      + '1. Lee el criterio del punto: qué exige el requisito tal cual.\n'
       + '2. En Conformidad marca Cumple, Parcial, No cumple o N/A según la evidencia real.\n'
       + '3. En Riesgo registra el impacto que tendría la brecha.\n'
       + '4. En Hallazgo/observación escribe hechos verificables, no opiniones.\n'
-      + '5. En Acción o plan de mejora documenta qué se debe corregir, de preferencia con responsable y plazo.\n'
-      + '6. Adjunta evidencia trazable: documentos, registros, fotos, actas o reportes.';
+      + '5. En Categoría del hallazgo clasifica el punto: Conforme, Observación, No conformidad menor, No conformidad mayor u Oportunidad de mejora.\n'
+      + '6. Adjunta evidencia trazable: documentos, registros, fotos, actas, enlaces o evidencia redactada.';
   }
 
   function buildClauseGuidance(clause, mode) {
@@ -1820,28 +1831,26 @@
     if (mode === 'fill') {
       return ''
         + clause.id + ' - ' + textEs(clause.title) + '\n'
-        + 'Qué pide este punto: ' + textEs(clause.definition) + '.\n'
-        + 'Qué debe validar el auditor: ' + textEs(clause.question) + '.\n\n'
+        + 'Criterio (qué exige el requisito): ' + textEs(clause.definition) + '.\n\n'
         + 'Cómo llenarlo:\n'
         + '1. Conformidad: usa Cumple si la evidencia es suficiente y vigente; Parcial si existe pero está incompleta; No cumple si la práctica no existe o falla; N/A si no aplica y puedes justificarlo.\n'
         + '2. Hallazgo/observación: describe lo observado con hechos, por ejemplo documento, registro, entrevista o condición detectada.\n'
-        + '3. Acción o plan de mejora: indica la corrección o mejora esperada y, si es posible, responsable y plazo.\n'
+        + '3. Categoría del hallazgo: clasifícalo como Conforme, Observación, No conformidad menor, No conformidad mayor u Oportunidad de mejora.\n'
         + '4. Evidencia sugerida:\n' + evidence + '\n\n'
         + 'Puedes escribir algo como:\n'
         + '- Conformidad: Parcial, si existe evidencia pero falta actualizarla o demostrar su uso.\n'
         + '- Hallazgo/observación: Se revisó la evidencia disponible para el punto ' + clause.id + ', pero falta confirmar vigencia, responsable o trazabilidad completa.\n'
-        + '- Acción o plan de mejora: Actualizar la evidencia del punto, asignar responsable y conservar registros verificables para la próxima revisión.\n\n'
+        + '- Categoría del hallazgo: No conformidad menor, si la brecha es puntual y no compromete la conformidad general del sistema.\n\n'
         + 'Lo que ya llevas en este punto:\n'
         + '- Estado: ' + (finding.status || 'Sin registrar') + '\n'
         + '- Riesgo: ' + (normalizeRiskValue(finding.risk) || 'Sin registrar') + '\n'
         + '- Hallazgo: ' + (finding.note || 'Sin registrar') + '\n'
-        + '- Acción: ' + (finding.action || 'Sin registrar');
+        + '- Categoría del hallazgo: ' + (finding.category || 'Sin registrar');
     }
 
     return ''
       + clause.id + ' - ' + textEs(clause.title) + '\n'
-      + 'Qué significa: ' + textEs(clause.definition) + '.\n'
-      + 'Qué revisa el auditor: ' + textEs(clause.question) + '.\n'
+      + 'Qué significa (criterio): ' + textEs(clause.definition) + '.\n'
       + 'Evidencia útil para demostrarlo:\n' + evidence + '\n\n'
       + 'Consejo de auditoría: busca evidencia vigente, trazable y coherente entre documentos, práctica real y entrevistas.';
   }
@@ -2051,11 +2060,10 @@
     html += renderRiskPill(finding.risk);
     html += '    </div>';
     html += '  </div>';
-    html += '  <p class="audit-question"><i class="fa-solid fa-circle-question"></i><span><strong>Pregunta de auditor&iacute;a</strong><span class="audit-question-text">' + esc(textEs(clause.question)) + '</span></span></p>';
-    html += '  <details class="clause-brief">';
-    html += '    <summary><span><i class="fa-solid fa-book-open"></i> Qu&eacute; debes comprobar</span><i class="fa-solid fa-chevron-down"></i></summary>';
+    html += '  <div class="clause-brief clause-criterio">';
+    html += '    <div class="clause-brief-heading"><i class="fa-solid fa-scale-balanced"></i> Criterio</div>';
     html += '    <div class="clause-brief-content"><p class="clause-definition">' + esc(textEs(clause.definition)) + '</p>' + renderEvidenceGuide(clause.evidence) + '</div>';
-    html += '  </details>';
+    html += '  </div>';
     html += '  <div class="nora-clause-tools">';
     html += '    <span><i class="fa-solid fa-sparkles"></i> Ayuda contextual</span>';
     html += '    <button type="button" class="btn-nora-inline" data-action="nora-explain-clause" data-clause-id="' + esc(clause.id) + '">Expl&iacute;came el requisito</button>';
@@ -2077,16 +2085,18 @@
     html += '      </select>';
     html += '    </label>';
 
+    html += '    <label><span>Categor&iacute;a del hallazgo</span>';
+    html += '      <select data-field="category" data-clause-id="' + esc(clause.id) + '"' + ro + '>';
+    html += renderSelectOptions(FINDING_CATEGORIES, finding.category);
+    html += '      </select>';
+    html += '    </label>';
+
     html += '    <label class="wide"><span>Hallazgo u observaci&oacute;n</span><small>Describe el hecho, la evidencia revisada y la brecha detectada.</small>';
     html += '      <textarea rows="3" data-field="note" data-clause-id="' + esc(clause.id) + '" placeholder="Ej. Se revisó el procedimiento vigente y se observó que…"' + ro + '>' + esc(finding.note || '') + '</textarea>';
     html += '    </label>';
-
-    html += '    <label class="wide"><span>Acci&oacute;n o plan de mejora</span><small>Indica qu&eacute; debe hacerse; agrega responsable y fecha cuando los conozcas.</small>';
-    html += '      <textarea rows="3" data-field="action" data-clause-id="' + esc(clause.id) + '" placeholder="Ej. Actualizar el procedimiento, asignar responsable y verificar antes de…"' + ro + '>' + esc(finding.action || '') + '</textarea>';
-    html += '    </label>';
     html += '  </div>';
 
-    html += '  <div class="evidence-tools"><div><strong>Evidencia del requisito</strong><span>' + (readOnly ? 'Modo solo lectura: no puedes agregar evidencia.' : ('Adjunta documentos, fotograf&iacute;as o un enlace verificable (m&aacute;x. ' + EVIDENCE_MAX_PER_FINDING + ' por punto).')) + '</span></div>';
+    html += '  <div class="evidence-tools"><div><strong>Evidencia objetiva del requisito</strong><span>' + (readOnly ? 'Modo solo lectura: no puedes agregar evidencia.' : ('Adjunta documentos, fotograf&iacute;as, un enlace verificable o redacta la evidencia (m&aacute;x. ' + EVIDENCE_MAX_PER_FINDING + ' por punto).')) + '</span></div>';
     if (!readOnly) {
       html += '    <div class="evidence-actions">';
       html += '      <label class="upload-label">';
@@ -2096,6 +2106,10 @@
       html += '      <form class="link-form" data-link-form data-clause-id="' + esc(clause.id) + '">';
       html += '        <input type="url" inputmode="url" placeholder="Pega un enlace (https://...)" data-link-input />';
       html += '        <button type="submit" title="Agregar enlace como evidencia"><i class="fa-solid fa-link"></i></button>';
+      html += '      </form>';
+      html += '      <form class="link-form text-evidence-form" data-text-evidence-form data-clause-id="' + esc(clause.id) + '">';
+      html += '        <input type="text" placeholder="Redacta la evidencia objetiva…" data-text-evidence-input maxlength="2000" />';
+      html += '        <button type="submit" title="Guardar evidencia redactada"><i class="fa-solid fa-pen"></i></button>';
       html += '      </form>';
       html += '    </div>';
     }
@@ -2142,6 +2156,16 @@
     var i;
     for (i = 0; i < attachments.length; i += 1) {
       var file = attachments[i];
+      if (file.evidenceType === 'text') {
+        html += ''
+          + '<article class="evidence-item is-text">'
+          + '  <div class="evidence-meta"><i class="fa-solid fa-pen"></i><span><strong>Evidencia redactada</strong>' + esc(file.contentText || '') + '</span></div>'
+          + '  <div class="evidence-item-actions">'
+          + '    <button class="btn btn-danger" type="button" data-action="remove-attachment" data-clause-id="' + esc(clauseId) + '" data-file-id="' + esc(file.id) + '"><i class="fa-solid fa-trash"></i> Quitar</button>'
+          + '  </div>'
+          + '</article>';
+        continue;
+      }
       if (file.evidenceType === 'link') {
         html += ''
           + '<article class="evidence-item is-link">'
@@ -2294,6 +2318,20 @@
   }
 
   function onChecklistSubmit(event) {
+    var textForm = event.target.closest ? event.target.closest('[data-text-evidence-form]') : null;
+    if (textForm) {
+      event.preventDefault();
+      if (isReadOnlyUser()) return;
+
+      var textInput = textForm.querySelector('[data-text-evidence-input]');
+      var text = textInput ? textInput.value.trim() : '';
+      if (!text) return;
+
+      addTextEvidenceToClause(textForm.getAttribute('data-clause-id'), text);
+      if (textInput) textInput.value = '';
+      return;
+    }
+
     var form = event.target.closest ? event.target.closest('[data-link-form]') : null;
     if (!form) return;
     event.preventDefault();
@@ -2369,7 +2407,7 @@
       status: (state.findings[clauseId] && state.findings[clauseId].status) || '',
       risk: (state.findings[clauseId] && state.findings[clauseId].risk) || '',
       note: (state.findings[clauseId] && state.findings[clauseId].note) || '',
-      action: (state.findings[clauseId] && state.findings[clauseId].action) || '',
+      category: (state.findings[clauseId] && state.findings[clauseId].category) || '',
       updated_by: currentUser.id
     }, { onConflict: 'audit_id,clause_id' }).select().single();
 
@@ -2446,7 +2484,7 @@
       status: finding.status || '',
       risk: finding.risk || '',
       note: finding.note || '',
-      action: finding.action || '',
+      category: finding.category || '',
       updated_by: currentUser.id
     }, { onConflict: 'audit_id,clause_id' }).select().single();
 
@@ -2479,6 +2517,58 @@
     updateEvidenceListDom(clauseId, finding.attachments);
     renderMetrics(iso);
     showToast('Enlace agregado al punto ' + clauseId + '.');
+  }
+
+  async function addTextEvidenceToClause(clauseId, text) {
+    if (isReadOnlyUser() || !sb || !currentAudit || !currentUser) return;
+    var iso = findIsoById(state.selectedIsoId);
+    if (!iso) return;
+
+    var finding = state.findings[clauseId] || newEmptyFinding();
+    if ((finding.attachments || []).length >= EVIDENCE_MAX_PER_FINDING) {
+      showToast('Este punto ya tiene el máximo de ' + EVIDENCE_MAX_PER_FINDING + ' evidencias.');
+      return;
+    }
+
+    var findingResult = await sb.from('audit_findings').upsert({
+      audit_id: currentAudit.id,
+      clause_id: clauseId,
+      status: finding.status || '',
+      risk: finding.risk || '',
+      note: finding.note || '',
+      category: finding.category || '',
+      updated_by: currentUser.id
+    }, { onConflict: 'audit_id,clause_id' }).select().single();
+
+    if (findingResult.error) {
+      showToast('No se pudo guardar el hallazgo antes de redactar la evidencia.');
+      return;
+    }
+
+    var evidenceResult = await sb.from('audit_evidence').insert({
+      finding_id: findingResult.data.id,
+      evidence_type: 'text',
+      content_text: text,
+      uploaded_by: currentUser.id
+    }).select().single();
+
+    if (evidenceResult.error) {
+      showToast(evidenceResult.error.message || 'No se pudo guardar la evidencia redactada.');
+      return;
+    }
+
+    finding.attachments = finding.attachments || [];
+    finding.attachments.push({
+      id: evidenceResult.data.id,
+      evidenceType: 'text',
+      contentText: text,
+      createdAt: evidenceResult.data.created_at
+    });
+    state.findings[clauseId] = finding;
+
+    updateEvidenceListDom(clauseId, finding.attachments);
+    renderMetrics(iso);
+    showToast('Evidencia redactada agregada al punto ' + clauseId + '.');
   }
 
   async function removeAttachment(clauseId, fileId) {
@@ -2555,7 +2645,12 @@
       remaining: 0,
       nextClauseId: '',
       nextClauseTitle: '',
-      progress: 0
+      progress: 0,
+      majorNc: 0,
+      minorNc: 0,
+      observations: 0,
+      opportunities: 0,
+      conforming: 0
     };
 
     var i;
@@ -2574,10 +2669,18 @@
         summary.nextClauseId = clauses[i].id;
         summary.nextClauseTitle = textEs(clauses[i].title || 'Requisito pendiente');
       }
+
+      var category = finding.category || '';
+      if (category === 'No conformidad mayor') summary.majorNc += 1;
+      else if (category === 'No conformidad menor') summary.minorNc += 1;
+      else if (category === 'Observación') summary.observations += 1;
+      else if (category === 'Oportunidad de mejora') summary.opportunities += 1;
+      else if (category === 'Conforme') summary.conforming += 1;
     }
 
     summary.remaining = Math.max(0, summary.total - summary.evaluated);
     summary.progress = summary.total > 0 ? Math.round((summary.evaluated / summary.total) * 100) : 0;
+    summary.passed = summary.majorNc === 0;
     return summary;
   }
 
@@ -2676,8 +2779,12 @@
       drawTitle(doc, iso, y);
       y = 118;
 
+      y = writeParagraph(doc, 'Objetivo de la auditoría', state.project.objective || 'N/D', y, margin, width);
+      y = writeParagraph(doc, 'Criterio de auditoría', state.project.criteria || 'N/D', y + 2, margin, width);
+
+      y = ensureSpace(doc, y, 110);
       y = writeLine(doc, 'Proyecto / Empresa', state.project.name || 'N/D', y, margin);
-      y = writeLine(doc, 'Auditor', state.project.auditor || 'N/D', y, margin);
+      y = writeLine(doc, 'Equipo auditor', state.project.auditor || 'N/D', y, margin);
       y = writeLine(doc, 'Representante auditado', state.project.auditedRep || 'N/D', y, margin);
       y = writeLine(doc, 'Sitio', state.project.site || 'N/D', y, margin);
       y = writeLine(doc, 'Fecha de auditoría', state.project.date || 'N/D', y, margin);
@@ -2687,7 +2794,12 @@
 
       y = ensureSpace(doc, y, 94);
       y = writeHistoryTable(doc, y, margin, width);
-      y = writeSignatureBlock(doc, y, margin, width);
+
+      y = ensureSpace(doc, y, 96);
+      y = writeClassificationSection(doc, y, margin, width, summary);
+
+      y = ensureSpace(doc, y, 70);
+      y = writeInsightSection(doc, y, margin, width, summary);
 
       var sections = iso.sections;
       var s;
@@ -2703,7 +2815,7 @@
         for (c = 0; c < sections[s].clauses.length; c += 1) {
           var clause = sections[s].clauses[c];
           var finding = state.findings[clause.id] || newEmptyFinding();
-          var attachmentNames = attachmentsToText(finding.attachments);
+          var evidenceText = attachmentsToText(finding.attachments);
 
           y = ensureSpace(doc, y, 122);
           doc.setFont('helvetica', 'bold');
@@ -2713,15 +2825,17 @@
 
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(9);
-          y = writeWrapped(doc, 'Definición: ' + textEs(clause.definition), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Revisión: ' + textEs(clause.question), margin + 8, y, width - 20, 11);
+          y = writeWrapped(doc, 'Criterio: ' + textEs(clause.definition), margin + 8, y, width - 20, 11);
           y = writeWrapped(doc, 'Estado: ' + (finding.status || 'Sin evaluar') + ' | Riesgo: ' + (normalizeRiskValue(finding.risk) || 'N/D'), margin + 8, y, width - 20, 11);
           y = writeWrapped(doc, 'Hallazgo: ' + (finding.note || 'N/D'), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Acción: ' + (finding.action || 'N/D'), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Archivos: ' + attachmentNames, margin + 8, y, width - 20, 11);
+          y = writeWrapped(doc, 'Categoría del hallazgo: ' + (finding.category || 'N/D'), margin + 8, y, width - 20, 11);
+          y = writeWrapped(doc, 'Evidencia: ' + evidenceText, margin + 8, y, width - 20, 11);
           y += 8;
         }
       }
+
+      y = ensureSpace(doc, y, 130);
+      y = writeSignatureBlock(doc, y, margin, width);
 
       var filename = 'Auditoria_' + iso.code.replace(/[^a-zA-Z0-9]/g, '') + '_' + formatDateName(new Date()) + '.pdf';
       doc.save(filename);
@@ -2864,12 +2978,59 @@
     return y + 12;
   }
 
+  function writeClassificationSection(doc, y, margin, width, summary) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Resumen y clasificación de la auditoría', margin, y);
+    y += 14;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    y = writeWrapped(doc, 'No conformidades mayores: ' + summary.majorNc, margin + 4, y, width - 20, 12);
+    y = writeWrapped(doc, 'No conformidades menores: ' + summary.minorNc, margin + 4, y, width - 20, 12);
+    y = writeWrapped(doc, 'Observaciones: ' + summary.observations + ' | Oportunidades de mejora: ' + summary.opportunities + ' | Conformes: ' + summary.conforming, margin + 4, y, width - 20, 12);
+    y = writeWrapped(doc, 'Puntos evaluados: ' + summary.evaluated + ' de ' + summary.total + ' (' + summary.progress + '%)', margin + 4, y, width - 20, 12);
+    y += 4;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    if (summary.passed) {
+      doc.setTextColor(30, 110, 60);
+      doc.text('Resultado: AUDITORÍA APROBADA (sin no conformidades mayores)', margin + 4, y);
+    } else {
+      doc.setTextColor(150, 30, 30);
+      doc.text('Resultado: AUDITORÍA NO APROBADA (' + summary.majorNc + ' no conformidad(es) mayor(es))', margin + 4, y);
+    }
+    doc.setTextColor(33, 33, 33);
+    return y + 16;
+  }
+
+  function buildAuditInsight(summary) {
+    if (summary.majorNc > 0) {
+      return 'Se detectaron ' + summary.majorNc + ' no conformidad(es) mayor(es); el sistema no puede considerarse conforme hasta cerrar acciones correctivas sobre estos hallazgos.';
+    }
+    if (summary.minorNc > 0) {
+      return 'No se detectaron no conformidades mayores. Se identificaron ' + summary.minorNc + ' no conformidad(es) menor(es) que conviene atender en el corto plazo para fortalecer el sistema de gestión de la calidad.';
+    }
+    if (summary.observations > 0 || summary.opportunities > 0) {
+      return 'El sistema evaluado se mantiene conforme, sin no conformidades. Se identificaron observaciones y/o oportunidades de mejora que, de atenderse, fortalecerían el desempeño del SGC.';
+    }
+    if (summary.evaluated < summary.total) {
+      return 'La auditoría aún tiene ' + summary.remaining + ' punto(s) sin evaluar; complétalos para obtener una clasificación final representativa.';
+    }
+    return 'El sistema evaluado se mantiene conforme, sin hallazgos negativos registrados en los puntos auditados.';
+  }
+
+  function writeInsightSection(doc, y, margin, width, summary) {
+    return writeParagraph(doc, 'Insight', buildAuditInsight(summary), y, margin, width);
+  }
+
   function writeSignatureBlock(doc, y, margin, width) {
     y = ensureSpace(doc, y, 120);
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.text('Firma del auditor:', margin, y);
+    doc.text('Firma del equipo auditor:', margin, y);
     y += 8;
 
     var signatureDataUrl = getEffectiveSignatureDataUrl();
@@ -2938,12 +3099,18 @@
   }
 
   function attachmentsToText(attachments) {
-    if (!attachments || !attachments.length) return 'Sin archivos ni enlaces';
+    if (!attachments || !attachments.length) return 'Sin evidencia registrada';
     var parts = [];
     var i;
     for (i = 0; i < attachments.length; i += 1) {
       var item = attachments[i];
-      parts.push(item.evidenceType === 'link' ? ('Enlace: ' + item.externalUrl) : item.name);
+      if (item.evidenceType === 'link') {
+        parts.push('Enlace: ' + item.externalUrl);
+      } else if (item.evidenceType === 'text') {
+        parts.push(item.contentText || '');
+      } else {
+        parts.push(item.name);
+      }
     }
     return parts.join('; ');
   }
@@ -3352,7 +3519,9 @@
       date: (currentAudit && currentAudit.audit_date) || '',
       scope: (currentAudit && currentAudit.scope) || '',
       docVersion: (currentAudit && currentAudit.doc_version) || '',
-      auditedRep: (currentAudit && currentAudit.audited_rep) || ''
+      auditedRep: (currentAudit && currentAudit.audited_rep) || '',
+      objective: (currentAudit && currentAudit.objective) || '',
+      criteria: (currentAudit && currentAudit.audit_criteria) || ''
     };
     state.history = getEmptyHistoryRows();
     if (currentAudit && Object.prototype.toString.call(currentAudit.history) === '[object Array]') {
@@ -3382,7 +3551,7 @@
         status: f.status || '',
         risk: f.risk || '',
         note: f.note || '',
-        action: f.action || '',
+        category: f.category || '',
         attachments: []
       };
     }
@@ -3407,6 +3576,7 @@
           type: ev.mime_type || 'application/octet-stream',
           storagePath: ev.storage_path,
           externalUrl: ev.external_url,
+          contentText: ev.content_text,
           createdAt: ev.created_at
         });
       }
@@ -3470,6 +3640,8 @@
         scope: state.project.scope || '',
         doc_version: state.project.docVersion || '',
         audited_rep: state.project.auditedRep || '',
+        objective: state.project.objective || '',
+        audit_criteria: state.project.criteria || '',
         history: state.history
       }).eq('id', currentAudit.id);
 
@@ -3483,7 +3655,7 @@
             status: f.status || '',
             risk: f.risk || '',
             note: f.note || '',
-            action: f.action || '',
+            category: f.category || '',
             updated_by: currentUser.id
           };
         });

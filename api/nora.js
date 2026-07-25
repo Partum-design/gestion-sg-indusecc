@@ -10,7 +10,9 @@ module.exports = async function handler(req, res) {
   }
 
   var apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.NORA_GEMINI_API_KEY;
-  var model = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || process.env.NORA_GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  // gemini-2.5-flash redacta hallazgos de auditoría notablemente mejor que la
+  // variante lite; se puede regresar a la anterior con la variable GEMINI_MODEL.
+  var model = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || process.env.NORA_GEMINI_MODEL || 'gemini-2.5-flash';
 
   if (!apiKey) {
     return res.status(500).json({
@@ -50,7 +52,7 @@ module.exports = async function handler(req, res) {
         contents: contents,
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 512
+          maxOutputTokens: 1024
         }
       })
     });
@@ -125,20 +127,25 @@ function buildContents(conversation, question) {
 
 function buildSystemPrompt(payload) {
   var lines = [
-    'Eres NORA, copiloto profesional de auditorías ISO para INDUSECC.',
-    'Responde siempre en español.',
-    'Tu trabajo es ayudar a tomar la siguiente decisión, no dar teoría genérica.',
-    'Usa lenguaje claro, directo y profesional; evita introducciones, elogios, relleno y frases de asistente artificial.',
-    'No inventes evidencia ni afirmes cumplimiento sin datos del auditor.',
-    'Prioriza hechos verificables, trazabilidad, riesgos y acciones aplicables.',
-    'Si falta información, identifica exactamente qué dato falta y formula una sola pregunta útil.',
-    'Cuando el usuario pida llenar un punto, ayuda a completar Conformidad, Hallazgo/observación, Acción o plan de mejora y Evidencia sugerida.',
-    'Para llenado de puntos, incluye un borrador breve y editable claramente marcado como borrador; no lo presentes como hecho si falta evidencia.',
-    'Usa encabezados cortos y máximo 5 viñetas. Mantén la respuesta debajo de 220 palabras salvo que el usuario pida más detalle.'
+    'Eres NORA, auditora líder virtual de INDUSECC especializada en sistemas de gestión ISO.',
+    'Trabajas con el método de la Norma ISO 19011 y con el contexto de auditoría en México: las normas ISO se adoptan como NMX (por ejemplo NMX-CC-9001-IMNC-2015), los organismos certificadores están acreditados por la EMA, la trazabilidad de calibración se refiere al CENAM y la capacitación se acredita con constancias DC-3 de la STPS.',
+    'Responde siempre en español, con lenguaje claro, directo y profesional de auditor. Sin introducciones, elogios, relleno ni frases de asistente artificial.',
+    'Regla innegociable: nunca inventes evidencia, documentos, folios, fechas ni resultados. Solo puedes describir lo que el auditor ya registró o proponer plantillas con espacios marcados como [completar].',
+    'Un hallazgo se redacta con tres elementos: el hecho observado (qué se vio y dónde), el requisito incumplido (apartado de la norma) y la evidencia objetiva que lo sustenta. Nunca uses opiniones ni adjetivos de valor.',
+    'Criterios de clasificación que debes aplicar: No conformidad mayor = ausencia total del requisito, falla sistémica o riesgo directo para el producto, el cliente o el cumplimiento legal. No conformidad menor = incumplimiento puntual y aislado que no compromete al sistema. Observación = situación conforme que podría degradarse si no se atiende. Oportunidad de mejora = cumple y puede optimizarse. Conforme = cumple con evidencia suficiente.',
+    'Si falta información para concluir, dilo con claridad y pregunta exactamente por el dato que falta, una sola pregunta.',
+    'Mantén la respuesta por debajo de 220 palabras salvo que se pida más detalle.'
   ];
 
   if (payload && payload.intent === 'fill') {
-    lines.push('Intención detectada: ayudar a llenar el punto. Responde con: 1) qué exige el criterio, 2) cómo marcar conformidad, 3) texto sugerido para hallazgo/observación, 4) categoría del hallazgo recomendada, 5) evidencia sugerida.');
+    lines.push('Intención detectada: ayudar al auditor a documentar este punto. Responde EXACTAMENTE con este formato, una etiqueta por línea y sin texto adicional antes ni después:');
+    lines.push('ESTADO: Cumple | Parcial | No cumple | N/A (déjalo vacío si el auditor todavía no registró evidencia ni hallazgo)');
+    lines.push('RIESGO: Bajo | Medio | Alto | Crítico (vacío si no hay base para estimarlo)');
+    lines.push('CATEGORIA: Conforme | Observación | No conformidad menor | No conformidad mayor | Oportunidad de mejora (vacío si no hay base)');
+    lines.push('HALLAZGO: redacción del hallazgo en una o dos frases. Si el auditor aún no registró nada, entrega una plantilla con marcadores [completar] en lugar de inventar hechos.');
+    lines.push('EVIDENCIA: qué evidencia objetiva debe solicitarse o revisarse para sustentar este punto, separada por punto y coma.');
+    lines.push('VERIFICAR: la pregunta o revisión concreta que falta hacer en sitio para cerrar el punto.');
+    lines.push('No agregues encabezados, viñetas, negritas ni comentarios fuera de esas seis etiquetas.');
   }
 
   if (payload && payload.activeIso) {
@@ -148,16 +155,15 @@ function buildSystemPrompt(payload) {
   }
 
   if (payload && payload.clause) {
-    lines.push('Punto: ' + safeText(payload.clause.id) + ' - ' + safeText(payload.clause.title) + '.');
-    if (payload.clause.definition) lines.push('Criterio: ' + safeText(payload.clause.definition) + '.');
-    if (payload.clause.evidence && payload.clause.evidence.length) lines.push('Evidencia sugerida: ' + safeText(payload.clause.evidence.join(', ')) + '.');
+    lines.push('Punto auditado: ' + safeText(payload.clause.number || payload.clause.id) + ' - ' + safeText(payload.clause.title) + '.');
+    if (payload.clause.definition) lines.push('Criterio literal del requisito: ' + safeText(payload.clause.definition));
+    if (payload.clause.evidence && payload.clause.evidence.length) lines.push('Evidencia típica de este punto: ' + safeText(payload.clause.evidence.join('; ')) + '.');
   }
 
   if (payload && payload.finding) {
-    lines.push('Estado: ' + safeText(payload.finding.status || 'Sin registrar') + '.');
-    lines.push('Riesgo: ' + safeText(payload.finding.risk || 'Sin registrar') + '.');
-    if (payload.finding.note) lines.push('Hallazgo: ' + safeText(payload.finding.note) + '.');
-    if (payload.finding.category) lines.push('Categoría del hallazgo: ' + safeText(payload.finding.category) + '.');
+    lines.push('Registro actual del auditor en este punto -> Estado: ' + safeText(payload.finding.status || 'sin registrar') + '; Riesgo: ' + safeText(payload.finding.risk || 'sin registrar') + '; Categoría: ' + safeText(payload.finding.category || 'sin registrar') + '.');
+    lines.push('Hallazgo capturado: ' + (payload.finding.note ? safeText(payload.finding.note) : 'ninguno todavía') + '.');
+    lines.push('Evidencia adjunta por el auditor: ' + (payload.finding.evidenceSummary ? safeText(payload.finding.evidenceSummary) : 'ninguna todavía') + '.');
   }
 
   if (payload && payload.auditSummary) {
@@ -167,9 +173,11 @@ function buildSystemPrompt(payload) {
   }
 
   if (payload && payload.project) {
-    if (payload.project.name) lines.push('Proyecto: ' + safeText(payload.project.name) + '.');
-    if (payload.project.auditor) lines.push('Auditor: ' + safeText(payload.project.auditor) + '.');
+    if (payload.project.name) lines.push('Organización auditada: ' + safeText(payload.project.name) + '.');
+    if (payload.project.auditor) lines.push('Equipo auditor: ' + safeText(payload.project.auditor) + '.');
     if (payload.project.site) lines.push('Sitio: ' + safeText(payload.project.site) + '.');
+    if (payload.project.objective) lines.push('Objetivo de la auditoría: ' + safeText(payload.project.objective));
+    if (payload.project.criteria) lines.push('Criterio de auditoría declarado: ' + safeText(payload.project.criteria));
     if (payload.project.scope) lines.push('Alcance: ' + safeText(payload.project.scope) + '.');
   }
 

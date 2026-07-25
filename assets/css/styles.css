@@ -1578,6 +1578,93 @@ h5 {
   color: #6c1726;
 }
 
+/* Borrador asistido por NORA: se muestra como propuesta, nunca como dato ya
+   registrado; el auditor lo aplica o lo descarta. */
+.nora-draft {
+  display: grid;
+  gap: 11px;
+}
+
+.nora-draft-head {
+  display: grid;
+  gap: 2px;
+}
+
+.nora-draft-head strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #6c1726;
+  font-size: 0.82rem;
+}
+
+.nora-draft-head small {
+  color: #8a6b52;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.nora-draft-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.nora-chip {
+  padding: 4px 10px;
+  border: 1px solid rgba(108, 23, 38, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  color: #5c3b2c;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.nora-chip.ok {
+  border-color: rgba(30, 110, 60, 0.35);
+  color: #1e6e3c;
+}
+
+.nora-chip.warn {
+  border-color: rgba(196, 116, 20, 0.35);
+  color: #a6640f;
+}
+
+.nora-chip.bad {
+  border-color: rgba(168, 38, 38, 0.35);
+  color: #a82626;
+}
+
+.nora-draft-block {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.nora-draft-block > span {
+  color: #8a6b52;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.nora-draft-block p {
+  margin: 0;
+  color: #4a2b21;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.nora-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .finding-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -3925,15 +4012,16 @@ body {
   transform: rotate(180deg);
 }
 
-.clause-brief-heading {
-  min-height: 43px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 13px;
-  color: #534944;
-  font-size: .75rem;
-  font-weight: 800;
+.clause-criterio {
+  border-left: 3px solid var(--audit-wine);
+}
+
+.clause-brief summary small {
+  margin-left: auto;
+  color: #8a7b6d;
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .clause-brief-content {
@@ -4608,6 +4696,10 @@ body {
 
   .clause-brief-content {
     grid-template-columns: 1fr;
+  }
+
+  .clause-brief summary small {
+    display: none;
   }
 
   .nora-clause-tools {

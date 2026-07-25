@@ -1559,7 +1559,7 @@
   function updateNoraContext(summary, iso) {
     if (!dom.noraContext || !summary || !iso) return;
     var message = summary.nextClauseId
-      ? summary.progress + '% completado · ' + summary.remaining + ' pendientes · siguiente ' + summary.nextClauseId
+      ? summary.progress + '% completado · ' + summary.remaining + ' pendientes · siguiente ' + summary.nextClauseNumber
       : '100% evaluado · lista para revisar el cierre y generar el informe';
     dom.noraContext.innerHTML = '<i class="fa-solid fa-chart-line"></i><span><strong>' + esc(iso.code) + '</strong><small>' + esc(message) + '</small></span>';
   }
@@ -1669,7 +1669,7 @@
     if (!clause || !target) return;
 
     target.classList.remove('hidden');
-    target.innerHTML = '<div class="nora-inline-state"><i class="fa-solid fa-spinner fa-spin"></i> NORA está analizando este punto...</div>';
+    target.innerHTML = '<div class="nora-inline-state"><i class="fa-solid fa-spinner fa-spin"></i> NORA está analizando este punto…</div>';
     button.disabled = true;
 
     askNora(buildClausePrompt(clause, mode), {
@@ -1678,9 +1678,19 @@
       clauseId: clause.id,
       clause: clause
     }).then(function (answer) {
-      target.innerHTML = '<div class="nora-inline-answer"><strong>NORA</strong><p>' + formatNoraText(answer) + '</p></div>';
+      var draft = mode === 'fill' ? parseNoraDraft(answer) : null;
+      if (draft) {
+        noraDrafts[clause.id] = draft;
+        target.innerHTML = renderNoraDraft(clause.id, draft);
+        return;
+      }
+      target.innerHTML = ''
+        + '<div class="nora-inline-answer">'
+        + '  <strong><i class="fa-solid fa-sparkles"></i> NORA</strong>'
+        + '  <p>' + formatNoraText(answer) + '</p>'
+        + '</div>';
     }).catch(function () {
-      target.innerHTML = '<div class="nora-inline-answer"><strong>NORA</strong><p>No pude resolver este punto en este momento.</p></div>';
+      target.innerHTML = '<div class="nora-inline-answer"><strong><i class="fa-solid fa-sparkles"></i> NORA</strong><p>No pude resolver este punto en este momento.</p></div>';
     }).finally(function () {
       button.disabled = false;
     });
@@ -1688,10 +1698,163 @@
 
   function buildClausePrompt(clause, mode) {
     var iso = getActiveIso();
+    var reference = clauseNumber(clause.id) + ' de ' + (iso ? iso.code : 'la norma activa');
     if (mode === 'fill') {
-      return 'Explícame cómo llenar el punto ' + clause.id + ' de ' + (iso ? iso.code : 'la norma activa') + '.';
+      return 'Ayúdame a documentar el punto ' + reference + ' con el formato de etiquetas indicado.';
     }
-    return 'Explícame qué significa el punto ' + clause.id + ' de ' + (iso ? iso.code : 'la norma activa') + '.';
+    return 'Explícame qué exige el punto ' + reference + ' y cómo se audita en la práctica.';
+  }
+
+  // ---------------------------------------------------------------------
+  // Borrador asistido: NORA devuelve etiquetas fijas (ESTADO/RIESGO/...) que
+  // se convierten en un borrador aplicable al punto. El auditor decide si lo
+  // aplica: nada se escribe en la auditoría sin que lo confirme.
+  // ---------------------------------------------------------------------
+
+  var noraDrafts = {};
+
+  var NORA_DRAFT_FIELDS = {
+    'ESTADO': 'status',
+    'RIESGO': 'risk',
+    'CATEGORIA': 'category',
+    'CATEGORÍA': 'category',
+    'HALLAZGO': 'note',
+    'EVIDENCIA': 'evidence',
+    'VERIFICAR': 'verify'
+  };
+
+  function parseNoraDraft(answer) {
+    var text = String(answer || '');
+    if (text.indexOf('HALLAZGO:') === -1) return null;
+
+    var draft = { status: '', risk: '', category: '', note: '', evidence: '', verify: '' };
+    var lines = text.split('\n');
+    var currentField = '';
+    var i;
+
+    for (i = 0; i < lines.length; i += 1) {
+      var line = String(lines[i]).replace(/^[\s*>-]+/, '').trim();
+      if (!line) continue;
+
+      var match = line.match(/^([A-ZÁÉÍÓÚÑ]+)\s*:\s*(.*)$/);
+      var field = match ? NORA_DRAFT_FIELDS[match[1]] : null;
+
+      if (field) {
+        currentField = field;
+        draft[field] = match[2].trim();
+      } else if (currentField) {
+        draft[currentField] += (draft[currentField] ? ' ' : '') + line;
+      }
+    }
+
+    draft.status = matchAllowedValue(draft.status, ['Cumple', 'Parcial', 'No cumple', 'N/A']);
+    draft.risk = normalizeRiskValue(matchAllowedValue(draft.risk, ['Bajo', 'Medio', 'Alto', 'Crítico', 'Critico']));
+    draft.category = matchAllowedValue(draft.category, FINDING_CATEGORIES);
+    draft.note = cleanDraftValue(draft.note);
+    draft.evidence = cleanDraftValue(draft.evidence);
+    draft.verify = cleanDraftValue(draft.verify);
+
+    return draft.note ? draft : null;
+  }
+
+  function cleanDraftValue(value) {
+    var text = String(value || '').trim();
+    if (!text || /^(vac[ií]o|n\/?d|ninguno|sin dato)$/i.test(text)) return '';
+    return text;
+  }
+
+  function matchAllowedValue(value, allowed) {
+    var normalized = normalizeSearchText(cleanDraftValue(value));
+    if (!normalized) return '';
+    var i;
+    for (i = 0; i < allowed.length; i += 1) {
+      if (allowed[i] && normalizeSearchText(allowed[i]) === normalized) return allowed[i];
+    }
+    return '';
+  }
+
+  function renderNoraDraft(clauseId, draft) {
+    var chips = '';
+    if (draft.status) chips += '<span class="nora-chip ' + esc(getStatusClass(draft.status)) + '">Estado: ' + esc(draft.status) + '</span>';
+    if (draft.risk) chips += '<span class="nora-chip">Riesgo: ' + esc(draft.risk) + '</span>';
+    if (draft.category) chips += '<span class="nora-chip">' + esc(draft.category) + '</span>';
+
+    var html = '';
+    html += '<div class="nora-draft">';
+    html += '  <div class="nora-draft-head"><strong><i class="fa-solid fa-wand-magic-sparkles"></i> Borrador sugerido por NORA</strong><small>Verifícalo contra la evidencia real antes de aplicarlo</small></div>';
+    if (chips) html += '  <div class="nora-draft-chips">' + chips + '</div>';
+    html += '  <div class="nora-draft-block"><span>Hallazgo propuesto</span><p>' + formatNoraText(draft.note) + '</p></div>';
+    if (draft.evidence) html += '  <div class="nora-draft-block"><span>Evidencia objetiva a solicitar</span><p>' + formatNoraText(draft.evidence) + '</p></div>';
+    if (draft.verify) html += '  <div class="nora-draft-block"><span>Falta verificar</span><p>' + formatNoraText(draft.verify) + '</p></div>';
+    html += '  <div class="nora-draft-actions">';
+    html += '    <button type="button" class="btn-nora-inline primary" data-action="apply-nora-draft" data-clause-id="' + esc(clauseId) + '"><i class="fa-solid fa-check"></i> Aplicar al punto</button>';
+    html += '    <button type="button" class="btn-nora-inline" data-action="dismiss-nora-draft" data-clause-id="' + esc(clauseId) + '">Descartar</button>';
+    html += '  </div>';
+    html += '</div>';
+    return html;
+  }
+
+  function applyNoraDraft(clauseId) {
+    if (isReadOnlyUser()) return;
+    var draft = noraDrafts[clauseId];
+    if (!draft) return;
+
+    var finding = state.findings[clauseId] || newEmptyFinding();
+    if (draft.status) finding.status = draft.status;
+    if (draft.risk) finding.risk = draft.risk;
+    if (draft.category) finding.category = draft.category;
+    if (draft.note) finding.note = draft.note;
+    state.findings[clauseId] = finding;
+    saveState();
+
+    var card = document.querySelector('.finding-card[data-clause-id="' + cssEscape(clauseId) + '"]');
+    if (card) {
+      syncFindingCardInputs(card, finding);
+      var response = card.querySelector('[data-nora-response]');
+      if (response) {
+        response.innerHTML = '<div class="nora-inline-state"><i class="fa-solid fa-circle-check"></i> Borrador aplicado. Ajusta la redacción y adjunta la evidencia objetiva.</div>';
+      }
+    }
+
+    delete noraDrafts[clauseId];
+    pulseFindingCard(clauseId);
+
+    var iso = findIsoById(state.selectedIsoId);
+    if (iso) {
+      renderMetrics(iso);
+      updateChecklistProgressVisuals(iso);
+    }
+    showToast('Borrador aplicado al punto ' + clauseNumber(clauseId) + '. Revísalo antes de cerrar la auditoría.');
+  }
+
+  // Refleja el estado del hallazgo en los controles ya renderizados, sin
+  // volver a dibujar todo el checklist (conserva el scroll del auditor).
+  function syncFindingCardInputs(card, finding) {
+    var statusSelect = card.querySelector('[data-field="status"]');
+    var riskSelect = card.querySelector('[data-field="risk"]');
+    var categorySelect = card.querySelector('[data-field="category"]');
+    var noteInput = card.querySelector('[data-field="note"]');
+
+    if (statusSelect) statusSelect.value = finding.status || '';
+    if (riskSelect) riskSelect.value = finding.risk || '';
+    if (categorySelect) categorySelect.value = finding.category || '';
+    if (noteInput) noteInput.value = finding.note || '';
+
+    card.classList.toggle('is-evaluated', Boolean(finding.status));
+    card.classList.toggle('is-pending', !finding.status);
+
+    var badge = card.querySelector('.badge-status');
+    if (badge) {
+      badge.className = 'badge-status ' + getStatusClass(finding.status);
+      badge.textContent = finding.status || 'Sin evaluar';
+    }
+
+    var pill = card.querySelector('.risk-pill');
+    if (pill) {
+      var riskClass = getRiskClass(finding.risk);
+      pill.className = 'risk-pill' + (riskClass ? ' ' + riskClass : '');
+      pill.textContent = finding.risk || 'Sin riesgo';
+    }
   }
 
   function askNora(question, options) {
@@ -1740,12 +1903,18 @@
       } : null,
       clause: clause ? {
         id: clause.id,
-        title: clause.title,
-        definition: clause.definition,
-        question: clause.question,
-        evidence: clause.evidence || []
+        number: clauseNumber(clause.id),
+        title: textEs(clause.title),
+        definition: textEs(clause.definition),
+        evidence: (clause.evidence || []).map(function (item) { return textEs(item); })
       } : null,
-      finding: finding,
+      finding: finding ? {
+        status: finding.status,
+        risk: finding.risk,
+        note: finding.note,
+        category: finding.category,
+        evidenceSummary: attachmentsToText(finding.attachments)
+      } : null,
       auditSummary: auditSummary,
       project: state.project,
       conversation: conversation
@@ -1791,7 +1960,11 @@
     }
 
     if (note) {
-      answer += '\n\nNota: ' + note;
+      // Si la respuesta viene en formato de etiquetas, la nota va al inicio
+      // para no quedar absorbida dentro del último campo del borrador.
+      answer = answer.indexOf('HALLAZGO:') !== -1
+        ? 'Nota: ' + note + '\n\n' + answer
+        : answer + '\n\nNota: ' + note;
     }
     return answer;
   }
@@ -1828,28 +2001,24 @@
       ? '- ' + clause.evidence.map(function (item) { return textEs(item); }).join('\n- ')
       : '- Evidencia objetiva del cumplimiento de este requisito.';
 
+    // Se responde con el mismo formato de etiquetas que usa Gemini para que el
+    // borrador aplicable también funcione sin conexión con el modelo.
     if (mode === 'fill') {
+      var evidenceInline = (clause.evidence && clause.evidence.length)
+        ? clause.evidence.map(function (item) { return textEs(item); }).join('; ')
+        : 'Evidencia objetiva que demuestre el cumplimiento de este requisito.';
+
       return ''
-        + clause.id + ' - ' + textEs(clause.title) + '\n'
-        + 'Criterio (qué exige el requisito): ' + textEs(clause.definition) + '.\n\n'
-        + 'Cómo llenarlo:\n'
-        + '1. Conformidad: usa Cumple si la evidencia es suficiente y vigente; Parcial si existe pero está incompleta; No cumple si la práctica no existe o falla; N/A si no aplica y puedes justificarlo.\n'
-        + '2. Hallazgo/observación: describe lo observado con hechos, por ejemplo documento, registro, entrevista o condición detectada.\n'
-        + '3. Categoría del hallazgo: clasifícalo como Conforme, Observación, No conformidad menor, No conformidad mayor u Oportunidad de mejora.\n'
-        + '4. Evidencia sugerida:\n' + evidence + '\n\n'
-        + 'Puedes escribir algo como:\n'
-        + '- Conformidad: Parcial, si existe evidencia pero falta actualizarla o demostrar su uso.\n'
-        + '- Hallazgo/observación: Se revisó la evidencia disponible para el punto ' + clause.id + ', pero falta confirmar vigencia, responsable o trazabilidad completa.\n'
-        + '- Categoría del hallazgo: No conformidad menor, si la brecha es puntual y no compromete la conformidad general del sistema.\n\n'
-        + 'Lo que ya llevas en este punto:\n'
-        + '- Estado: ' + (finding.status || 'Sin registrar') + '\n'
-        + '- Riesgo: ' + (normalizeRiskValue(finding.risk) || 'Sin registrar') + '\n'
-        + '- Hallazgo: ' + (finding.note || 'Sin registrar') + '\n'
-        + '- Categoría del hallazgo: ' + (finding.category || 'Sin registrar');
+        + 'ESTADO: ' + (finding.status || '') + '\n'
+        + 'RIESGO: ' + (normalizeRiskValue(finding.risk) || '') + '\n'
+        + 'CATEGORIA: ' + (finding.category || '') + '\n'
+        + 'HALLAZGO: ' + (finding.note || ('Durante la revisión del apartado ' + clauseNumber(clause.id) + ' (' + textEs(clause.title) + ') se verificó [documento o registro] de fecha [completar] y se observó que [hecho verificable].')) + '\n'
+        + 'EVIDENCIA: ' + evidenceInline + '\n'
+        + 'VERIFICAR: Confirma vigencia, responsable y trazabilidad de la evidencia antes de cerrar el punto.';
     }
 
     return ''
-      + clause.id + ' - ' + textEs(clause.title) + '\n'
+      + clauseNumber(clause.id) + ' - ' + textEs(clause.title) + '\n'
       + 'Qué significa (criterio): ' + textEs(clause.definition) + '.\n'
       + 'Evidencia útil para demostrarlo:\n' + evidence + '\n\n'
       + 'Consejo de auditoría: busca evidencia vigente, trazable y coherente entre documentos, práctica real y entrevistas.';
@@ -1860,7 +2029,7 @@
       ? clause.evidence.map(function (item) { return '- ' + textEs(item); }).join('\n')
       : '- Evidencia documental o registros que prueben la ejecución real del punto.';
     return ''
-      + clause.id + ' - ' + textEs(clause.title) + '\n'
+      + clauseNumber(clause.id) + ' - ' + textEs(clause.title) + '\n'
       + 'Para este punto conviene adjuntar evidencia como:\n'
       + evidence + '\n\n'
       + 'Además, intenta que la evidencia tenga fecha, responsable y relación directa con el requisito auditado.';
@@ -1898,7 +2067,7 @@
       'Evidencias adjuntas: ' + summary.evidenceTotal + '.'
     ];
     if (summary.nextClauseId) {
-      lines.push('Siguiente acción recomendada: revisa ' + summary.nextClauseId + ' — ' + summary.nextClauseTitle + '.');
+      lines.push('Siguiente acción recomendada: revisa ' + summary.nextClauseNumber + ' — ' + summary.nextClauseTitle + '.');
       lines.push('Primero confirma la evidencia; después registra conformidad, riesgo y el hallazgo observable.');
     } else {
       lines.push('Todos los requisitos están evaluados. Revisa los puntos parciales o no conformes, confirma la firma y genera el informe PDF.');
@@ -1918,10 +2087,10 @@
 
     var lines = [];
     if (missingProject.length) lines.push('Completa la ficha: ' + missingProject.join(', ') + '.');
-    if (summary.remaining) lines.push('Faltan ' + summary.remaining + ' requisitos por evaluar. El siguiente es ' + summary.nextClauseId + '.');
+    if (summary.remaining) lines.push('Faltan ' + summary.remaining + ' requisitos por evaluar. El siguiente es ' + summary.nextClauseNumber + '.');
     if (summary.evaluated && summary.evidenceTotal === 0) lines.push('Ya evaluaste puntos, pero todavía no hay evidencia adjunta. Confirma qué documentos o registros respaldan cada resultado.');
-    if (summary.partial || summary.bad) lines.push('Revisa ' + (summary.partial + summary.bad) + ' requisitos parciales o no conformes y asegúrate de registrar una acción concreta.');
-    if (!lines.length) lines.push('La información principal está completa. Haz una revisión final de evidencia, acciones, firma e informe.');
+    if (summary.partial || summary.bad) lines.push('Revisa ' + (summary.partial + summary.bad) + ' requisitos parciales o no conformes y asegúrate de clasificar la categoría del hallazgo.');
+    if (!lines.length) lines.push('La información principal está completa. Haz una revisión final de evidencia, categorías de hallazgo, firma e informe.');
     return 'Revisión de pendientes\n\n' + lines.join('\n\n');
   }
 
@@ -2040,6 +2209,13 @@
     return html;
   }
 
+  // Los ids internos llevan el prefijo de la norma ("9001-8.5.1") para no
+  // colisionar entre catálogos; al auditor se le muestra solo el número del
+  // apartado tal como aparece en la norma ("8.5.1").
+  function clauseNumber(clauseId) {
+    return String(clauseId || '').replace(/^[^-]*-/, '');
+  }
+
   function renderClauseCard(clause) {
     var finding = state.findings[clause.id] || newEmptyFinding();
     finding.risk = normalizeRiskValue(finding.risk);
@@ -2052,7 +2228,7 @@
     html += '<article class="finding-card' + completedClass + (readOnly ? ' is-readonly' : '') + '" data-clause-id="' + esc(clause.id) + '">';
     html += '  <div class="finding-head">';
     html += '    <div class="finding-title">';
-    html += '      <span class="clause-id">' + esc(clause.id) + '</span>';
+    html += '      <span class="clause-id">' + esc(clauseNumber(clause.id)) + '</span>';
     html += '      <div><small>Requisito a evaluar</small><h5>' + esc(textEs(clause.title)) + '</h5></div>';
     html += '    </div>';
     html += '    <div class="finding-head-tags">';
@@ -2060,10 +2236,10 @@
     html += renderRiskPill(finding.risk);
     html += '    </div>';
     html += '  </div>';
-    html += '  <div class="clause-brief clause-criterio">';
-    html += '    <div class="clause-brief-heading"><i class="fa-solid fa-scale-balanced"></i> Criterio</div>';
+    html += '  <details class="clause-brief clause-criterio">';
+    html += '    <summary><span><i class="fa-solid fa-scale-balanced"></i> Criterio del requisito</span><small>Qu&eacute; debe cumplirse tal cual lo pide la norma</small><i class="fa-solid fa-chevron-down"></i></summary>';
     html += '    <div class="clause-brief-content"><p class="clause-definition">' + esc(textEs(clause.definition)) + '</p>' + renderEvidenceGuide(clause.evidence) + '</div>';
-    html += '  </div>';
+    html += '  </details>';
     html += '  <div class="nora-clause-tools">';
     html += '    <span><i class="fa-solid fa-sparkles"></i> Ayuda contextual</span>';
     html += '    <button type="button" class="btn-nora-inline" data-action="nora-explain-clause" data-clause-id="' + esc(clause.id) + '">Expl&iacute;came el requisito</button>';
@@ -2314,6 +2490,20 @@
     }
     if (action === 'nora-fill-clause') {
       requestClauseHelp(button, 'fill');
+      return;
+    }
+    if (action === 'apply-nora-draft') {
+      applyNoraDraft(String(button.getAttribute('data-clause-id') || ''));
+      return;
+    }
+    if (action === 'dismiss-nora-draft') {
+      var dismissedId = String(button.getAttribute('data-clause-id') || '');
+      delete noraDrafts[dismissedId];
+      var panel = button.closest ? button.closest('[data-nora-response]') : null;
+      if (panel) {
+        panel.innerHTML = '';
+        panel.classList.add('hidden');
+      }
     }
   }
 
@@ -2464,7 +2654,7 @@
 
     updateEvidenceListDom(clauseId, finding.attachments);
     renderMetrics(iso);
-    showToast('Archivo(s) agregado(s) al punto ' + clauseId + '.');
+    showToast('Archivo(s) agregado(s) al punto ' + clauseNumber(clauseId) + '.');
   }
 
   async function addLinkToClause(clauseId, url) {
@@ -2516,7 +2706,7 @@
 
     updateEvidenceListDom(clauseId, finding.attachments);
     renderMetrics(iso);
-    showToast('Enlace agregado al punto ' + clauseId + '.');
+    showToast('Enlace agregado al punto ' + clauseNumber(clauseId) + '.');
   }
 
   async function addTextEvidenceToClause(clauseId, text) {
@@ -2568,7 +2758,7 @@
 
     updateEvidenceListDom(clauseId, finding.attachments);
     renderMetrics(iso);
-    showToast('Evidencia redactada agregada al punto ' + clauseId + '.');
+    showToast('Evidencia redactada agregada al punto ' + clauseNumber(clauseId) + '.');
   }
 
   async function removeAttachment(clauseId, fileId) {
@@ -2621,7 +2811,7 @@
     if (dom.commandProgressCopy) dom.commandProgressCopy.textContent = summary.evaluated + ' de ' + summary.total + ' requisitos evaluados';
     if (dom.commandNextStep) {
       dom.commandNextStep.textContent = summary.nextClauseId
-        ? 'Siguiente: ' + summary.nextClauseId + ' · ' + summary.nextClauseTitle
+        ? 'Siguiente: ' + summary.nextClauseNumber + ' · ' + summary.nextClauseTitle
         : 'Evaluación completa · revisa firma e informe';
     }
     if (dom.commandContinue) {
@@ -2644,13 +2834,16 @@
       highRisk: 0,
       remaining: 0,
       nextClauseId: '',
+      nextClauseNumber: '',
       nextClauseTitle: '',
       progress: 0,
       majorNc: 0,
       minorNc: 0,
       observations: 0,
       opportunities: 0,
-      conforming: 0
+      conforming: 0,
+      evaluatedWithoutEvidence: 0,
+      weakestSectionTitle: ''
     };
 
     var i;
@@ -2667,8 +2860,11 @@
       summary.evidenceTotal += (finding.attachments || []).length;
       if (!status && !summary.nextClauseId) {
         summary.nextClauseId = clauses[i].id;
+        summary.nextClauseNumber = clauseNumber(clauses[i].id);
         summary.nextClauseTitle = textEs(clauses[i].title || 'Requisito pendiente');
       }
+
+      if (status && !(finding.attachments || []).length) summary.evaluatedWithoutEvidence += 1;
 
       var category = finding.category || '';
       if (category === 'No conformidad mayor') summary.majorNc += 1;
@@ -2681,7 +2877,31 @@
     summary.remaining = Math.max(0, summary.total - summary.evaluated);
     summary.progress = summary.total > 0 ? Math.round((summary.evaluated / summary.total) * 100) : 0;
     summary.passed = summary.majorNc === 0;
+    summary.weakestSectionTitle = findWeakestSectionTitle(iso);
     return summary;
+  }
+
+  // Capítulo donde se acumulan más hallazgos negativos (mayor pesa doble).
+  function findWeakestSectionTitle(iso) {
+    var best = null;
+    var s;
+    var c;
+
+    for (s = 0; s < iso.sections.length; s += 1) {
+      var section = iso.sections[s];
+      var score = 0;
+      for (c = 0; c < section.clauses.length; c += 1) {
+        var category = (state.findings[section.clauses[c].id] || newEmptyFinding()).category;
+        if (category === 'No conformidad mayor') score += 2;
+        else if (category === 'No conformidad menor') score += 1;
+      }
+      if (score > 0 && (!best || score > best.score)) {
+        // "7. Apoyo" -> "el capítulo 7 (Apoyo)", para que encaje en una frase.
+        best = { score: score, title: textEs(section.title).replace(/^(\d+)\.\s*(.+)$/, 'el capítulo $1 ($2)') };
+      }
+    }
+
+    return best ? best.title : '';
   }
 
   function calculateSectionMetrics(section) {
@@ -2777,65 +2997,56 @@
       var summary = calculateMetrics(iso);
 
       drawTitle(doc, iso, y);
-      y = 118;
+      y = 116;
 
-      y = writeParagraph(doc, 'Objetivo de la auditoría', state.project.objective || 'N/D', y, margin, width);
-      y = writeParagraph(doc, 'Criterio de auditoría', state.project.criteria || 'N/D', y + 2, margin, width);
+      y = writeHighlightBox(doc, 'Objetivo de la auditoría', state.project.objective || 'No registrado', y, margin, width);
+      y = writeHighlightBox(doc, 'Criterio de auditoría', state.project.criteria || 'No registrado', y + 8, margin, width);
 
-      y = ensureSpace(doc, y, 110);
+      y = ensureSpace(doc, y, 150);
+      y = writeSectionHeading(doc, 'Datos de la auditoría', y + 14, margin, width);
       y = writeLine(doc, 'Proyecto / Empresa', state.project.name || 'N/D', y, margin);
       y = writeLine(doc, 'Equipo auditor', state.project.auditor || 'N/D', y, margin);
       y = writeLine(doc, 'Representante auditado', state.project.auditedRep || 'N/D', y, margin);
       y = writeLine(doc, 'Sitio', state.project.site || 'N/D', y, margin);
       y = writeLine(doc, 'Fecha de auditoría', state.project.date || 'N/D', y, margin);
       y = writeLine(doc, 'Versión del documento', state.project.docVersion || 'N/D', y, margin);
-      y = writeLine(doc, 'Progreso global', summary.progress + '% (' + summary.evaluated + '/' + summary.total + ' puntos)', y, margin);
       y = writeParagraph(doc, 'Alcance', state.project.scope || 'N/D', y + 4, margin, width);
 
-      y = ensureSpace(doc, y, 94);
+      y = ensureSpace(doc, y, 116);
+      y = writeSectionHeading(doc, 'Control de versiones', y + 10, margin, width);
       y = writeHistoryTable(doc, y, margin, width);
 
-      y = ensureSpace(doc, y, 96);
-      y = writeClassificationSection(doc, y, margin, width, summary);
+      y = ensureSpace(doc, y, 214);
+      y = writeSectionHeading(doc, 'Resumen y clasificación de la auditoría', y + 10, margin, width);
+      y = writeSummaryCards(doc, y, margin, width, summary);
+      y = writeResultBanner(doc, y + 12, margin, width, summary);
+      y = writeInsightBox(doc, y + 12, margin, width, buildAuditInsight(summary));
 
-      y = ensureSpace(doc, y, 70);
-      y = writeInsightSection(doc, y, margin, width, summary);
+      y = ensureSpace(doc, y, 96);
+      y = writeSectionHeading(doc, 'Matriz de evaluación por requisito', y + 14, margin, width);
 
       var sections = iso.sections;
       var s;
       var c;
       for (s = 0; s < sections.length; s += 1) {
-        y = ensureSpace(doc, y, 50);
+        y = ensureSpace(doc, y, 88);
 
+        doc.setFillColor(245, 236, 220);
+        doc.rect(margin, y - 10, width, 19, 'F');
+        doc.setTextColor(91, 17, 31);
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(11);
-        doc.text(textEs(sections[s].title), margin, y);
-        y += 16;
+        doc.setFontSize(10);
+        doc.text(textEs(sections[s].title), margin + 8, y + 3);
+        doc.setTextColor(33, 33, 33);
+        y += 24;
 
         for (c = 0; c < sections[s].clauses.length; c += 1) {
-          var clause = sections[s].clauses[c];
-          var finding = state.findings[clause.id] || newEmptyFinding();
-          var evidenceText = attachmentsToText(finding.attachments);
-
-          y = ensureSpace(doc, y, 122);
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(10);
-          doc.text(clause.id + ' - ' + textEs(clause.title), margin + 4, y);
-          y += 12;
-
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9);
-          y = writeWrapped(doc, 'Criterio: ' + textEs(clause.definition), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Estado: ' + (finding.status || 'Sin evaluar') + ' | Riesgo: ' + (normalizeRiskValue(finding.risk) || 'N/D'), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Hallazgo: ' + (finding.note || 'N/D'), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Categoría del hallazgo: ' + (finding.category || 'N/D'), margin + 8, y, width - 20, 11);
-          y = writeWrapped(doc, 'Evidencia: ' + evidenceText, margin + 8, y, width - 20, 11);
-          y += 8;
+          y = writeClauseBlock(doc, sections[s].clauses[c], y, margin, width);
         }
       }
 
-      y = ensureSpace(doc, y, 130);
-      y = writeSignatureBlock(doc, y, margin, width);
+      y = ensureSpace(doc, y, 150);
+      y = writeSignatureBlock(doc, y + 8, margin, width);
 
       var filename = 'Auditoria_' + iso.code.replace(/[^a-zA-Z0-9]/g, '') + '_' + formatDateName(new Date()) + '.pdf';
       doc.save(filename);
@@ -2938,10 +3149,6 @@
     var i;
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('Control de versiones', margin, y);
-    y += 10;
-
     doc.setFillColor(245, 236, 220);
     doc.rect(x, y, width, rowHeight, 'F');
     doc.setDrawColor(220, 199, 157);
@@ -2978,91 +3185,361 @@
     return y + 12;
   }
 
-  function writeClassificationSection(doc, y, margin, width, summary) {
+  // ---------------------------------------------------------------------
+  // Bloques visuales del informe PDF. Todo se dibuja con primitivas de jsPDF
+  // (rectángulos + texto) para que el informe se lea como un documento de
+  // auditoría formal y no como un volcado de texto corrido.
+  // ---------------------------------------------------------------------
+
+  var PDF_WINE = [91, 17, 31];
+  var PDF_CREAM = [250, 241, 219];
+  var PDF_LINE = [220, 199, 157];
+  var PDF_INK = [33, 33, 33];
+  var PDF_MUTED = [120, 105, 92];
+
+  function pdfCategoryColor(category) {
+    if (category === 'No conformidad mayor') return [168, 38, 38];
+    if (category === 'No conformidad menor') return [196, 116, 20];
+    if (category === 'Observación') return [146, 112, 24];
+    if (category === 'Oportunidad de mejora') return [37, 88, 138];
+    if (category === 'Conforme') return [30, 110, 60];
+    return PDF_MUTED;
+  }
+
+  function pdfStatusColor(status) {
+    if (status === 'Cumple') return [30, 110, 60];
+    if (status === 'Parcial') return [196, 116, 20];
+    if (status === 'No cumple') return [168, 38, 38];
+    return PDF_MUTED;
+  }
+
+  function setPdfFill(doc, color) {
+    doc.setFillColor(color[0], color[1], color[2]);
+  }
+
+  function setPdfText(doc, color) {
+    doc.setTextColor(color[0], color[1], color[2]);
+  }
+
+  function setPdfDraw(doc, color) {
+    doc.setDrawColor(color[0], color[1], color[2]);
+  }
+
+  // Barra de encabezado de sección del informe.
+  function writeSectionHeading(doc, title, y, margin, width) {
+    setPdfFill(doc, PDF_WINE);
+    doc.rect(margin, y - 11, width, 20, 'F');
+    setPdfText(doc, PDF_CREAM);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.text('Resumen y clasificación de la auditoría', margin, y);
-    y += 14;
+    doc.text(String(title).toUpperCase(), margin + 8, y + 2);
+    setPdfText(doc, PDF_INK);
+    return y + 26;
+  }
 
+  // Caja destacada con etiqueta arriba y texto envuelto (objetivo, criterio).
+  function writeHighlightBox(doc, label, value, y, margin, width) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    var lines = doc.splitTextToSize(String(value), width - 26);
+    var boxHeight = 26 + (lines.length * 12);
+
+    y = ensureSpace(doc, y, boxHeight + 10);
+
+    setPdfFill(doc, [252, 248, 240]);
+    setPdfDraw(doc, PDF_LINE);
+    doc.rect(margin, y, width, boxHeight, 'FD');
+    setPdfFill(doc, PDF_WINE);
+    doc.rect(margin, y, 4, boxHeight, 'F');
+
+    setPdfText(doc, PDF_WINE);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text(String(label).toUpperCase(), margin + 14, y + 15);
+
+    setPdfText(doc, PDF_INK);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.text(lines, margin + 14, y + 29);
+
+    return y + boxHeight;
+  }
+
+  // Tarjetas con el conteo de hallazgos por categoría.
+  function writeSummaryCards(doc, y, margin, width, summary) {
+    var cards = [
+      { value: summary.majorNc, label: 'NC mayores', color: pdfCategoryColor('No conformidad mayor') },
+      { value: summary.minorNc, label: 'NC menores', color: pdfCategoryColor('No conformidad menor') },
+      { value: summary.observations, label: 'Observaciones', color: pdfCategoryColor('Observación') },
+      { value: summary.opportunities, label: 'Oport. mejora', color: pdfCategoryColor('Oportunidad de mejora') },
+      { value: summary.conforming, label: 'Conformes', color: pdfCategoryColor('Conforme') }
+    ];
+    var gap = 8;
+    var cardWidth = (width - (gap * (cards.length - 1))) / cards.length;
+    var cardHeight = 52;
+    var i;
+
+    for (i = 0; i < cards.length; i += 1) {
+      var x = margin + (i * (cardWidth + gap));
+      setPdfFill(doc, [252, 248, 240]);
+      setPdfDraw(doc, PDF_LINE);
+      doc.rect(x, y, cardWidth, cardHeight, 'FD');
+      setPdfFill(doc, cards[i].color);
+      doc.rect(x, y, cardWidth, 3, 'F');
+
+      setPdfText(doc, cards[i].color);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(18);
+      doc.text(String(cards[i].value), x + (cardWidth / 2), y + 30, { align: 'center' });
+
+      setPdfText(doc, PDF_MUTED);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.text(cards[i].label.toUpperCase(), x + (cardWidth / 2), y + 44, { align: 'center' });
+    }
+
+    y += cardHeight + 14;
+
+    setPdfText(doc, PDF_INK);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    y = writeWrapped(doc, 'No conformidades mayores: ' + summary.majorNc, margin + 4, y, width - 20, 12);
-    y = writeWrapped(doc, 'No conformidades menores: ' + summary.minorNc, margin + 4, y, width - 20, 12);
-    y = writeWrapped(doc, 'Observaciones: ' + summary.observations + ' | Oportunidades de mejora: ' + summary.opportunities + ' | Conformes: ' + summary.conforming, margin + 4, y, width - 20, 12);
-    y = writeWrapped(doc, 'Puntos evaluados: ' + summary.evaluated + ' de ' + summary.total + ' (' + summary.progress + '%)', margin + 4, y, width - 20, 12);
-    y += 4;
+    doc.text('Puntos evaluados: ' + summary.evaluated + ' de ' + summary.total + ' (' + summary.progress + '%)  ·  Sin evaluar: ' + summary.remaining + '  ·  Evidencias registradas: ' + summary.evidenceTotal, margin, y);
 
+    return y + 6;
+  }
+
+  // Franja con el veredicto de la auditoría.
+  function writeResultBanner(doc, y, margin, width, summary) {
+    var passed = Boolean(summary.passed);
+    var accent = passed ? [30, 110, 60] : [168, 38, 38];
+    var background = passed ? [238, 247, 240] : [252, 238, 238];
+    var height = 42;
+
+    y = ensureSpace(doc, y, height + 12);
+
+    setPdfFill(doc, background);
+    setPdfDraw(doc, accent);
+    doc.rect(margin, y, width, height, 'FD');
+    setPdfFill(doc, accent);
+    doc.rect(margin, y, 5, height, 'F');
+
+    setPdfText(doc, accent);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    if (summary.passed) {
-      doc.setTextColor(30, 110, 60);
-      doc.text('Resultado: AUDITORÍA APROBADA (sin no conformidades mayores)', margin + 4, y);
-    } else {
-      doc.setTextColor(150, 30, 30);
-      doc.text('Resultado: AUDITORÍA NO APROBADA (' + summary.majorNc + ' no conformidad(es) mayor(es))', margin + 4, y);
-    }
-    doc.setTextColor(33, 33, 33);
-    return y + 16;
+    doc.setFontSize(12);
+    doc.text(passed ? 'RESULTADO: AUDITORÍA APROBADA' : 'RESULTADO: AUDITORÍA NO APROBADA', margin + 16, y + 19);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text(passed
+      ? 'No se registraron no conformidades mayores en los puntos auditados.'
+      : 'Se ' + (summary.majorNc === 1 ? 'registró' : 'registraron') + ' ' + pluralize(summary.majorNc, 'no conformidad mayor', 'no conformidades mayores') + ' que ' + (summary.majorNc === 1 ? 'impide' : 'impiden') + ' declarar conformidad.', margin + 16, y + 32);
+
+    setPdfText(doc, PDF_INK);
+    return y + height;
+  }
+
+  // Caja de lectura ejecutiva del resultado.
+  function writeInsightBox(doc, y, margin, width, text) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    var lines = doc.splitTextToSize(String(text || ''), width - 30);
+    var height = 30 + (lines.length * 12);
+
+    y = ensureSpace(doc, y, height + 10);
+
+    setPdfFill(doc, [248, 244, 236]);
+    setPdfDraw(doc, PDF_LINE);
+    doc.rect(margin, y, width, height, 'FD');
+    setPdfFill(doc, [200, 138, 26]);
+    doc.rect(margin, y, 4, height, 'F');
+
+    setPdfText(doc, [140, 96, 18]);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('INSIGHT DEL AUDITOR', margin + 14, y + 16);
+
+    setPdfText(doc, PDF_INK);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.text(lines, margin + 14, y + 31);
+
+    return y + height;
+  }
+
+  // Ficha de un punto de la matriz: número, título, resultado y registro.
+  function writeClauseBlock(doc, clause, y, margin, width) {
+    var finding = state.findings[clause.id] || newEmptyFinding();
+    var status = finding.status || 'Sin evaluar';
+    var risk = normalizeRiskValue(finding.risk) || 'N/D';
+    var category = finding.category || 'Sin clasificar';
+    var innerWidth = width - 26;
+
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'normal');
+    var criterionLines = doc.splitTextToSize(textEs(clause.definition || ''), innerWidth);
+    var noteLines = doc.splitTextToSize(finding.note || 'Sin hallazgo registrado.', innerWidth);
+    var evidenceLines = doc.splitTextToSize(attachmentsToText(finding.attachments), innerWidth);
+
+    doc.setFontSize(9.5);
+    doc.setFont('helvetica', 'bold');
+    var titleLines = doc.splitTextToSize(clauseNumber(clause.id) + '  ' + textEs(clause.title || ''), innerWidth - 74);
+
+    var blockHeight = 20
+      + (titleLines.length * 12)
+      + 16
+      + (criterionLines.length * 10.5) + 12
+      + (noteLines.length * 10.5) + 12
+      + (evidenceLines.length * 10.5) + 12;
+
+    y = ensureSpace(doc, y, blockHeight + 14);
+
+    var top = y;
+    setPdfDraw(doc, PDF_LINE);
+    setPdfFill(doc, [255, 253, 249]);
+    doc.rect(margin, top, width, blockHeight, 'FD');
+    setPdfFill(doc, pdfCategoryColor(finding.category));
+    doc.rect(margin, top, 3, blockHeight, 'F');
+
+    var textX = margin + 13;
+    var cursor = top + 18;
+
+    setPdfText(doc, PDF_WINE);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.text(titleLines, textX, cursor);
+    cursor += (titleLines.length * 12) + 2;
+
+    // Chips de resultado alineados a la derecha del encabezado del punto.
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    setPdfText(doc, pdfStatusColor(finding.status));
+    doc.text(status.toUpperCase(), margin + width - 12, top + 16, { align: 'right' });
+    setPdfText(doc, PDF_MUTED);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Riesgo: ' + risk, margin + width - 12, top + 27, { align: 'right' });
+
+    cursor = writePdfField(doc, 'CRITERIO', criterionLines, textX, cursor, PDF_MUTED);
+    cursor = writePdfField(doc, 'HALLAZGO', noteLines, textX, cursor, PDF_MUTED);
+
+    setPdfText(doc, pdfCategoryColor(finding.category));
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.text('CATEGORÍA DEL HALLAZGO: ' + category.toUpperCase(), textX, cursor);
+    cursor += 12;
+
+    cursor = writePdfField(doc, 'EVIDENCIA OBJETIVA', evidenceLines, textX, cursor, PDF_MUTED);
+
+    setPdfText(doc, PDF_INK);
+    return top + blockHeight + 10;
+  }
+
+  function writePdfField(doc, label, lines, x, y, labelColor) {
+    setPdfText(doc, labelColor);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.text(label, x, y);
+
+    setPdfText(doc, PDF_INK);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text(lines, x, y + 11);
+
+    return y + 11 + (lines.length * 10.5) + 6;
+  }
+
+  // Lectura ejecutiva del resultado: veredicto, dónde se concentra el problema
+  // y qué falta para que el informe sea defendible ante un tercero.
+  function pluralize(count, singular, plural) {
+    return count + ' ' + (count === 1 ? singular : plural);
   }
 
   function buildAuditInsight(summary) {
-    if (summary.majorNc > 0) {
-      return 'Se detectaron ' + summary.majorNc + ' no conformidad(es) mayor(es); el sistema no puede considerarse conforme hasta cerrar acciones correctivas sobre estos hallazgos.';
-    }
-    if (summary.minorNc > 0) {
-      return 'No se detectaron no conformidades mayores. Se identificaron ' + summary.minorNc + ' no conformidad(es) menor(es) que conviene atender en el corto plazo para fortalecer el sistema de gestión de la calidad.';
-    }
-    if (summary.observations > 0 || summary.opportunities > 0) {
-      return 'El sistema evaluado se mantiene conforme, sin no conformidades. Se identificaron observaciones y/o oportunidades de mejora que, de atenderse, fortalecerían el desempeño del SGC.';
-    }
-    if (summary.evaluated < summary.total) {
-      return 'La auditoría aún tiene ' + summary.remaining + ' punto(s) sin evaluar; complétalos para obtener una clasificación final representativa.';
-    }
-    return 'El sistema evaluado se mantiene conforme, sin hallazgos negativos registrados en los puntos auditados.';
-  }
+    var parts = [];
 
-  function writeInsightSection(doc, y, margin, width, summary) {
-    return writeParagraph(doc, 'Insight', buildAuditInsight(summary), y, margin, width);
+    if (summary.majorNc > 0) {
+      parts.push('Se ' + (summary.majorNc === 1 ? 'registró' : 'registraron') + ' ' + pluralize(summary.majorNc, 'no conformidad mayor', 'no conformidades mayores') + ', por lo que el sistema no puede declararse conforme hasta ' + (summary.majorNc === 1 ? 'cerrarla' : 'cerrarlas') + ' y verificar la eficacia de las acciones correctivas.');
+    } else if (summary.minorNc > 0) {
+      parts.push('No hay no conformidades mayores. ' + (summary.minorNc === 1 ? 'La no conformidad menor detectada es puntual y debe cerrarse' : 'Las ' + summary.minorNc + ' no conformidades menores detectadas son puntuales y deben cerrarse') + ' dentro del plazo acordado.');
+    } else if (summary.observations > 0 || summary.opportunities > 0) {
+      parts.push('El sistema se mantiene conforme: no se registraron no conformidades, solo observaciones y oportunidades de mejora.');
+    } else if (summary.evaluated > 0) {
+      parts.push('El sistema se mantiene conforme en los puntos auditados, sin hallazgos negativos registrados.');
+    } else {
+      parts.push('Todavía no hay puntos evaluados, por lo que aún no puede emitirse una conclusión de auditoría.');
+    }
+
+    if (summary.weakestSectionTitle) {
+      parts.push('Los hallazgos se concentran en ' + summary.weakestSectionTitle + ', que conviene priorizar en el plan de seguimiento.');
+    }
+
+    if (summary.evaluatedWithoutEvidence > 0) {
+      parts.push(pluralize(summary.evaluatedWithoutEvidence, 'punto evaluado no tiene', 'puntos evaluados no tienen') + ' evidencia objetiva adjunta; sin ella el resultado no es verificable por un tercero.');
+    }
+
+    if (summary.remaining > 0) {
+      parts.push('Falta' + (summary.remaining === 1 ? '' : 'n') + ' ' + pluralize(summary.remaining, 'punto', 'puntos') + ' por evaluar para que la clasificación sea representativa de toda la norma.');
+    }
+
+    return parts.join(' ');
   }
 
   function writeSignatureBlock(doc, y, margin, width) {
-    y = ensureSpace(doc, y, 120);
+    y = ensureSpace(doc, y, 130);
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('Firma del equipo auditor:', margin, y);
-    y += 8;
+    y = writeSectionHeading(doc, 'Firma del equipo auditor', y, margin, width);
+    y += 4;
 
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    setPdfText(doc, PDF_MUTED);
+    doc.text(doc.splitTextToSize('Equipo auditor: ' + (state.project.auditor || 'N/D'), width - 120)[0], margin, y);
+    doc.text('Fecha: ' + (state.project.date || 'N/D'), margin + width, y, { align: 'right' });
+    setPdfText(doc, PDF_INK);
+    y += 16;
+
+    var boxWidth = width * 0.52;
+    var boxHeight = 86;
     var signatureDataUrl = getEffectiveSignatureDataUrl();
-    if (!signatureDataUrl) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.text('N/D', margin + 94, y);
-      return y + 12;
-    }
 
-    try {
-      var properties = doc.getImageProperties(signatureDataUrl);
-      var maxW = width * 0.42;
-      var maxH = 72;
-      var ratio = properties.width / properties.height;
-      var drawW = maxW;
-      var drawH = drawW / ratio;
-      if (drawH > maxH) {
-        drawH = maxH;
-        drawW = drawH * ratio;
+    setPdfDraw(doc, PDF_LINE);
+    setPdfFill(doc, [252, 248, 240]);
+    doc.rect(margin, y, boxWidth, boxHeight, 'FD');
+
+    if (signatureDataUrl) {
+      try {
+        var properties = doc.getImageProperties(signatureDataUrl);
+        var maxW = boxWidth - 32;
+        var maxH = boxHeight - 30;
+        var ratio = properties.width / properties.height;
+        var drawW = maxW;
+        var drawH = drawW / ratio;
+        if (drawH > maxH) {
+          drawH = maxH;
+          drawW = drawH * ratio;
+        }
+        doc.addImage(signatureDataUrl, properties.fileType || 'PNG', margin + 16, y + 10, drawW, drawH);
+      } catch (err) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        setPdfText(doc, PDF_MUTED);
+        doc.text('No se pudo renderizar la firma.', margin + 16, y + 40);
       }
-
-      doc.setDrawColor(220, 199, 157);
-      doc.rect(margin + 94, y - 10, maxW + 12, maxH + 12);
-      doc.addImage(signatureDataUrl, properties.fileType || 'PNG', margin + 100, y - 4, drawW, drawH);
-      return y + maxH + 16;
-    } catch (err) {
-      doc.setFont('helvetica', 'normal');
+    } else {
+      doc.setFont('helvetica', 'italic');
       doc.setFontSize(9);
-      doc.text('No se pudo renderizar la firma.', margin + 94, y);
-      return y + 12;
+      setPdfText(doc, PDF_MUTED);
+      doc.text('Sin firma registrada.', margin + 16, y + 40);
     }
+
+    setPdfDraw(doc, PDF_MUTED);
+    doc.line(margin + 16, y + boxHeight - 16, margin + boxWidth - 16, y + boxHeight - 16);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    setPdfText(doc, PDF_MUTED);
+    doc.text('NOMBRE Y FIRMA DEL EQUIPO AUDITOR', margin + 16, y + boxHeight - 6);
+    setPdfText(doc, PDF_INK);
+
+    return y + boxHeight + 12;
   }
 
   function writeLine(doc, label, value, y, margin) {
